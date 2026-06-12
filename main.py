@@ -10,7 +10,8 @@ from datetime import datetime
 from io import BytesIO
 
 import aiohttp
-import asyncpg
+import re as _re_sql
+import aiosqlite
 import pandas as pd
 import phonenumbers
 import pycountry
@@ -37,52 +38,29 @@ from telegram.ext import (
     ContextTypes,
 )
 
-BOT_TOKEN           = "8518029747:AAEmh89aY2yfX1w6b8Y5405Z-rahgRi3DJI"
-BOT_NAME            = "Oracotp"
-BOT_LINK            = "https://t.me/oracotp_bot"
-BASE_ADMIN_IDS      = [8339856952, 6524840104]
+BOT_TOKEN           = "8878647937:AAHJDnSs-2dRia3-WWqzpg2iAWnEQ_-RocQ"
+BOT_NAME            = "4EVER OTP BOT"
+BOT_LINK            = "http://t.me/evr4kingbos_bott"
+BASE_ADMIN_IDS      = [1249070695, 6524840104]
 
-PANEL_BASE          = "http://139.99.69.196"
+PANEL_BASE          = "http://54.38.176.48"
 PANEL_LOGIN_PAGE    = f"{PANEL_BASE}/ints/login"
 PANEL_SIGNIN_URL    = f"{PANEL_BASE}/ints/signin"
 PANEL_CDR_URL       = f"{PANEL_BASE}/ints/client/SMSCDRStats"
 PANEL_DATA_URL      = f"{PANEL_BASE}/ints/client/res/data_smscdr.php"
-PANEL_USERNAME      = "WhatsappChannel"
-PANEL_PASSWORD      = "WhatsappChannel"
+PANEL_USERNAME      = "tahubulat"
+PANEL_PASSWORD      = "anjing123"
 
-PANEL2_BASE         = "http://2.59.169.96"
-PANEL2_LOGIN_PAGE   = f"{PANEL2_BASE}/ints/login"
-PANEL2_SIGNIN_URL   = f"{PANEL2_BASE}/ints/signin"
-PANEL2_CDR_URL      = f"{PANEL2_BASE}/ints/client/SMSCDRStats"
-PANEL2_DATA_URL     = f"{PANEL2_BASE}/ints/client/res/data_smscdr.php"
-PANEL2_USERNAME     = "NigeriaTg019"
-PANEL2_PASSWORD     = "NigeriaTg019"
-
-PANEL3_BASE         = "http://15.235.182.3"
-PANEL3_LOGIN_PAGE   = f"{PANEL3_BASE}/konekta/sign-in"
-PANEL3_SIGNIN_URL   = f"{PANEL3_BASE}/konekta/signin"
-PANEL3_CDR_URL      = f"{PANEL3_BASE}/konekta/client/SMSCDRStats"
-PANEL3_DATA_URL     = f"{PANEL3_BASE}/konekta/client/res/data_smscdr.php"
-PANEL3_USERNAME     = "Malik0"
-PANEL3_PASSWORD     = "Malik0"
-
-PANEL4_BASE         = "http://151.80.19.204"
-PANEL4_LOGIN_PAGE   = f"{PANEL4_BASE}/ints/login"
-PANEL4_SIGNIN_URL   = f"{PANEL4_BASE}/ints/signin"
-PANEL4_CDR_URL      = f"{PANEL4_BASE}/ints/client/SMSCDRStats"
-PANEL4_DATA_URL     = f"{PANEL4_BASE}/ints/client/res/data_smscdr.php"
-PANEL4_USERNAME     = "Malik0"
-PANEL4_PASSWORD     = "Malik0"
 
 MAIN_CHANNEL        = "@oracron"
-MAIN_CHANNEL_LINK   = "https://t.me/oracron"
-BACKUP_CHANNEL      = "@oracbott"
-BACKUP_CHANNEL_LINK = "https://t.me/oracbott"
+MAIN_CHANNEL_LINK   = "https://t.me/evrrrr12"
+BACKUP_CHANNEL      = "@evrrrr12"
+BACKUP_CHANNEL_LINK = "https://t.me/evrrrr12"
 OTP_GROUP_LINK      = "https://t.me/afrixotpgc"
-OTP_GROUP_ID        = -1003053441379
-FORCE_CHANNELS      = ["@oracron", "@oracbott"]
+OTP_GROUP_ID        = -1003825814385
+FORCE_CHANNELS      = ["@evrrrr12", "@evrrrr12"]
 
-DATABASE_URL        = "postgresql://neondb_owner:npg_ocasy6rIX2vR@ep-cold-darkness-ak558puk.c-3.us-west-2.aws.neon.tech/neondb?sslmode=require"
+DB_PATH             = os.environ.get("DB_PATH", "bot.db")
 PORT                = int(os.environ.get("PORT", 8080))
 POLL_INTERVAL       = 5
 KEEPALIVE_INTERVAL  = 180
@@ -110,23 +88,14 @@ maintenance  = False
 ADMIN_IDS    = list(BASE_ADMIN_IDS)
 
 worker_info = {
-    "running":         False,
-    "logged_in":       False,
-    "logged_in_p2":    False,
-    "logged_in_p3":    False,
-    "logged_in_p4":    False,
-    "last_otp":        "—",
-    "otps_today":      0,
-    "last_login":      "—",
-    "last_login_p2":   "—",
-    "last_login_p3":   "—",
-    "last_login_p4":   "—",
-    "errors":          0,
-    "login_errors":    0,
-    "login_errors_p2": 0,
-    "login_errors_p3": 0,
-    "login_errors_p4": 0,
-    "started_at":      datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    "running":      False,
+    "logged_in":    False,
+    "last_otp":     "—",
+    "otps_today":   0,
+    "last_login":   "—",
+    "errors":       0,
+    "login_errors": 0,
+    "started_at":   datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
 }
 
 _SC = str.maketrans(
@@ -237,31 +206,123 @@ def extract_numbers_smart(data: bytes, name: str) -> dict:
 
 _db_pool = None
 
+def _translate_sql(sql: str) -> str:
+    sql = _re_sql.sub(r"\$(\d+)", "?", sql)
+    sql = _re_sql.sub(r"\bNOW\s*\(\s*\)", "CURRENT_TIMESTAMP", sql, flags=_re_sql.IGNORECASE)
+    sql = _re_sql.sub(r"BIGSERIAL\s+PRIMARY\s+KEY", "INTEGER PRIMARY KEY AUTOINCREMENT", sql, flags=_re_sql.IGNORECASE)
+    sql = _re_sql.sub(r"\bBIGINT\b", "INTEGER", sql, flags=_re_sql.IGNORECASE)
+    sql = _re_sql.sub(r"\bBOOLEAN\b", "INTEGER", sql, flags=_re_sql.IGNORECASE)
+    sql = _re_sql.sub(r"\bTIMESTAMP\b", "TEXT", sql, flags=_re_sql.IGNORECASE)
+    sql = _re_sql.sub(r"\bTRUE\b", "1", sql)
+    sql = _re_sql.sub(r"\bFALSE\b", "0", sql)
+    sql = _re_sql.sub(r"\s+FOR\s+UPDATE(\s+SKIP\s+LOCKED)?", "", sql, flags=_re_sql.IGNORECASE)
+    return sql
+
+
+class _Tx:
+    def __init__(self, conn): self._conn = conn
+    async def __aenter__(self):
+        await self._conn.execute("BEGIN")
+        return self
+    async def __aexit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            await self._conn.commit()
+        else:
+            await self._conn.rollback()
+
+
+class _ConnWrapper:
+    def __init__(self, conn, lock):
+        self._conn = conn
+        self._lock = lock
+
+    def transaction(self):
+        return _Tx(self._conn)
+
+    async def execute(self, sql, *args):
+        t = _translate_sql(sql)
+        stripped = t.strip().rstrip(";").strip()
+        if ";" in stripped:
+            await self._conn.executescript(t)
+            await self._conn.commit()
+            return "OK"
+        cur = await self._conn.execute(t, args)
+        await self._conn.commit()
+        op = stripped.split(None, 1)[0].upper()
+        n = cur.rowcount if cur.rowcount is not None else 0
+        await cur.close()
+        if op == "INSERT":
+            return f"INSERT 0 {n}"
+        return f"{op} {n}"
+
+    async def fetchrow(self, sql, *args):
+        cur = await self._conn.execute(_translate_sql(sql), args)
+        row = await cur.fetchone()
+        await cur.close()
+        return row
+
+    async def fetch(self, sql, *args):
+        cur = await self._conn.execute(_translate_sql(sql), args)
+        rows = await cur.fetchall()
+        await cur.close()
+        return rows
+
+    async def fetchval(self, sql, *args):
+        row = await self.fetchrow(sql, *args)
+        return row[0] if row else None
+
+
+class _PoolAcquireCtx:
+    def __init__(self, pool): self._pool = pool
+    async def __aenter__(self):
+        await self._pool._lock.acquire()
+        return _ConnWrapper(self._pool._conn, self._pool._lock)
+    async def __aexit__(self, *a):
+        self._pool._lock.release()
+
+
+class _Pool:
+    def __init__(self, conn):
+        self._conn = conn
+        self._lock = asyncio.Lock()
+    def acquire(self):
+        return _PoolAcquireCtx(self)
+
+
 async def get_pool():
     global _db_pool
     if _db_pool is None:
-        _db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10, command_timeout=30)
+        conn = await aiosqlite.connect(DB_PATH)
+        conn.row_factory = aiosqlite.Row
+        await conn.execute("PRAGMA journal_mode=WAL")
+        await conn.execute("PRAGMA foreign_keys=ON")
+        _db_pool = _Pool(conn)
     return _db_pool
+
 
 async def db_execute(sql, *args):
     pool = await get_pool()
     async with pool.acquire() as conn:
         return await conn.execute(sql, *args)
 
+
 async def db_fetchone(sql, *args):
     pool = await get_pool()
     async with pool.acquire() as conn:
         return await conn.fetchrow(sql, *args)
+
 
 async def db_fetchall(sql, *args):
     pool = await get_pool()
     async with pool.acquire() as conn:
         return await conn.fetch(sql, *args)
 
+
 async def db_fetchval(sql, *args):
     pool = await get_pool()
     async with pool.acquire() as conn:
         return await conn.fetchval(sql, *args)
+
 
 async def init_db():
     pool = await get_pool()
@@ -1142,16 +1203,10 @@ async def status_text():
     avail   = await db_fetchval("SELECT COUNT(*) FROM numbers WHERE is_used=FALSE") or 0
     users   = await db_fetchval("SELECT COUNT(*) FROM users") or 0
     otps    = await db_fetchval("SELECT COUNT(*) FROM otp_history") or 0
-    p1_stat = "ᴏɴʟɪɴᴇ" if worker_info["logged_in"]    else "ᴏꜰꜰʟɪɴᴇ"
-    p2_stat = "ᴏɴʟɪɴᴇ" if worker_info["logged_in_p2"] else "ᴏꜰꜰʟɪɴᴇ"
-    p3_stat = "ᴏɴʟɪɴᴇ" if worker_info["logged_in_p3"] else "ᴏꜰꜰʟɪɴᴇ"
-    p4_stat = "ᴏɴʟɪɴᴇ" if worker_info["logged_in_p4"] else "ᴏꜰꜰʟɪɴᴇ"
+    p1_stat = "ᴏɴʟɪɴᴇ" if worker_info["logged_in"] else "ᴏꜰꜰʟɪɴᴇ"
     return (
         f"┌─ ꜱᴛᴀᴛᴜꜱ\n"
-        f"├─❏ ᴢʏʀᴏɴ        : {p4_stat} | {worker_info['last_login_p4']}\n"
-        f"├─❏ ꜱᴍꜱ ʜᴀᴅɪ    : {p1_stat} | {worker_info['last_login']}\n"
-        f"├─❏ ɴɪɢᴇʀɪᴀ      : {p2_stat} | {worker_info['last_login_p2']}\n"
-        f"├─❏ ᴋᴏɴᴇᴋᴛᴀ      : {p3_stat} | {worker_info['last_login_p3']}\n"
+        f"├─❏ ᴍʀ.ᴀꜰʀɪx      : {p1_stat} | {worker_info['last_login']}\n"
         f"├─❏ ᴏᴛᴘꜱ ᴛᴏᴅᴀʏ  : {worker_info['otps_today']}\n"
         f"├─❏ ʟᴀꜱᴛ ᴏᴛᴘ    : {worker_info['last_otp']}\n"
         f"├─❏ ɴᴜᴍʙᴇʀꜱ     : {total} ᴛᴏᴛᴀʟ / {avail} ᴀᴠᴀɪʟ\n"
@@ -1398,25 +1453,27 @@ class PanelSession:
         try:
             sess   = await self._get_session()
             now_dt = datetime.now()
-            fdate1 = now_dt.strftime("%Y-%m-01 00:00:00")
+            fdate1 = "2026-01-05 00:00:00"
             fdate2 = now_dt.strftime("%Y-%m-%d 23:59:59")
             params = {
                 "fdate1":         fdate1,
                 "fdate2":         fdate2,
                 "frange":         "",
+                "fclient":        "",
                 "fnum":           "",
                 "fcli":           "",
                 "fgdate":         "",
                 "fgmonth":        "",
                 "fgrange":        "",
+                "fgclient":       "",
                 "fgnumber":       "",
                 "fgcli":          "",
                 "fg":             "0",
                 "sEcho":          "1",
-                "iColumns":       "7",
-                "sColumns":       "......",
+                "iColumns":       "9",
+                "sColumns":       "........",
                 "iDisplayStart":  "0",
-                "iDisplayLength": "50",
+                "iDisplayLength": "25",
                 "mDataProp_0":    "0",
                 "sSearch_0":      "",
                 "bRegex_0":       "false",
@@ -1452,6 +1509,15 @@ class PanelSession:
                 "bRegex_6":       "false",
                 "bSearchable_6":  "true",
                 "bSortable_6":    "true",
+                "mDataProp_7":    "7",
+                "sSearch_7":      "",
+                "bRegex_7":       "false",
+                "bSearchable_7":  "true",
+                "bSortable_7":    "true",
+                "mDataProp_8":    "8",
+                "sSearch_8":      "",
+                "bRegex_8":       "false",
+                "bSearchable_8":  "false",
                 "sSearch":        "",
                 "bRegex":         "false",
                 "iSortCol_0":     "0",
@@ -1466,7 +1532,7 @@ class PanelSession:
                 self._data_url,
                 params=params,
                 headers={
-                    "Referer":          f"{self._base}/ints/client/SMSDashboard",
+                    "Referer":          f"{self._base}/ints/client/SMSCDRStats",
                     "X-Requested-With": "XMLHttpRequest",
                     "Accept":           "application/json, text/javascript, */*; q=0.01",
                     "Connection":       "keep-alive",
@@ -1516,31 +1582,13 @@ class PanelSession:
             await self._session.close()
 
 
-panel  = PanelSession(
+panel = PanelSession(
     base=PANEL_BASE, login_page=PANEL_LOGIN_PAGE, signin_url=PANEL_SIGNIN_URL,
     cdr_url=PANEL_CDR_URL, data_url=PANEL_DATA_URL,
-    username=PANEL_USERNAME, password=PANEL_PASSWORD, name="sms hadi",
+    username=PANEL_USERNAME, password=PANEL_PASSWORD, name="tahubulat",
     wi_logged="logged_in", wi_login="login_errors", wi_last_login="last_login",
 )
-panel2 = PanelSession(
-    base=PANEL2_BASE, login_page=PANEL2_LOGIN_PAGE, signin_url=PANEL2_SIGNIN_URL,
-    cdr_url=PANEL2_CDR_URL, data_url=PANEL2_DATA_URL,
-    username=PANEL2_USERNAME, password=PANEL2_PASSWORD, name="nigeria",
-    wi_logged="logged_in_p2", wi_login="login_errors_p2", wi_last_login="last_login_p2",
-)
-panel3 = PanelSession(
-    base=PANEL3_BASE, login_page=PANEL3_LOGIN_PAGE, signin_url=PANEL3_SIGNIN_URL,
-    cdr_url=PANEL3_CDR_URL, data_url=PANEL3_DATA_URL,
-    username=PANEL3_USERNAME, password=PANEL3_PASSWORD, name="konekta",
-    wi_logged="logged_in_p3", wi_login="login_errors_p3", wi_last_login="last_login_p3",
-)
-panel4 = PanelSession(
-    base=PANEL4_BASE, login_page=PANEL4_LOGIN_PAGE, signin_url=PANEL4_SIGNIN_URL,
-    cdr_url=PANEL4_CDR_URL, data_url=PANEL4_DATA_URL,
-    username=PANEL4_USERNAME, password=PANEL4_PASSWORD, name="zyron",
-    wi_logged="logged_in_p4", wi_login="login_errors_p4", wi_last_login="last_login_p4",
-)
-PANELS = [panel4, panel, panel2, panel3]
+PANELS = [panel]
 
 
 async def _watch_membership(app, user_id):
@@ -1688,10 +1736,7 @@ async def sms_worker(app):
         return
     worker_info["running"] = True
     await asyncio.gather(
-        _panel_worker(app, panel,  "logged_in",    "login_errors",    "last_login"),
-        _panel_worker(app, panel2, "logged_in_p2", "login_errors_p2", "last_login_p2"),
-        _panel_worker(app, panel3, "logged_in_p3", "login_errors_p3", "last_login_p3"),
-        _panel_worker(app, panel4, "logged_in_p4", "login_errors_p4", "last_login_p4"),
+        _panel_worker(app, panel, "logged_in", "login_errors", "last_login"),
     )
     worker_info["running"] = False
 
