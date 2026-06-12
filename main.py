@@ -34,6 +34,7 @@ from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
+    ChatMemberHandler,
     filters,
     ContextTypes,
 )
@@ -371,6 +372,17 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS settings (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS bot_chats (
+                chat_id   BIGINT PRIMARY KEY,
+                title     TEXT    DEFAULT '',
+                chat_type TEXT    DEFAULT '',
+                added_at  TIMESTAMP DEFAULT NOW()
+            );
+            CREATE TABLE IF NOT EXISTS seen_members (
+                chat_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                PRIMARY KEY (chat_id, user_id)
             );
             CREATE INDEX IF NOT EXISTS idx_otp_hash     ON otp_history(hash);
             CREATE INDEX IF NOT EXISTS idx_nums_country ON numbers(country);
@@ -891,7 +903,16 @@ def admin_markup():
             _btn("ʙʀᴏᴀᴅᴄᴀꜱᴛ", cb="adm_broadcast", style="success"),
             _btn("ꜱᴛᴀᴛᴜꜱ",   cb="adm_status",    style="primary"),
         ],
+        [_btn("ᴋɪᴄᴋ ᴀʟʟ", cb="adm_kickall", style="danger")],
         [_btn("ʙᴀᴄᴋ",    cb="menu_back",   style="danger")],
+    ])
+
+def kickall_confirm_markup():
+    return _markup([
+        [
+            _btn("ʏᴇꜱ, ᴋɪᴄᴋ ᴀʟʟ", cb="adm_kickall_confirm", style="danger"),
+            _btn("ᴄᴀɴᴄᴇʟ",       cb="adm_back",            style="primary"),
+        ],
     ])
 
 def back_to_menu():
@@ -1261,7 +1282,7 @@ class PanelSession:
 
     async def _get_session(self):
         if self._session is None or self._session.closed:
-            connector     = aiohttp.TCPConnector(ssl=False, limit=10, ttl_dns_cache=600, enable_cleanup_closed=True)
+            connector     = aiohttp.TCPConnector(ssl=False, limit=10, ttl_dns_cache=600, enable_cleanup_closed=True, keepalive_timeout=30, force_close=False)
             self._session = aiohttp.ClientSession(
                 connector=connector,
                 headers={
@@ -1306,6 +1327,11 @@ class PanelSession:
                 else:
                     self._last_ping     = now
                     self._last_activity = now
+        except (aiohttp.ServerDisconnectedError, aiohttp.ClientConnectionError, asyncio.TimeoutError) as e:
+            logger.warning(f"[{self._name}] Keepalive connection error, resetting session: {e}")
+            if self._session and not self._session.closed:
+                await self._session.close()
+            self._session = None
         except Exception as e:
             logger.warning(f"[{self._name}] Keepalive ping failed: {e}")
 
@@ -1450,132 +1476,144 @@ class PanelSession:
             return False
 
     async def fetch_cdr(self):
-        try:
-            sess   = await self._get_session()
-            now_dt = datetime.now()
-            fdate1 = "2026-01-05 00:00:00"
-            fdate2 = now_dt.strftime("%Y-%m-%d 23:59:59")
-            params = {
-                "fdate1":         fdate1,
-                "fdate2":         fdate2,
-                "frange":         "",
-                "fclient":        "",
-                "fnum":           "",
-                "fcli":           "",
-                "fgdate":         "",
-                "fgmonth":        "",
-                "fgrange":        "",
-                "fgclient":       "",
-                "fgnumber":       "",
-                "fgcli":          "",
-                "fg":             "0",
-                "sEcho":          "1",
-                "iColumns":       "9",
-                "sColumns":       "........",
-                "iDisplayStart":  "0",
-                "iDisplayLength": "25",
-                "mDataProp_0":    "0",
-                "sSearch_0":      "",
-                "bRegex_0":       "false",
-                "bSearchable_0":  "true",
-                "bSortable_0":    "true",
-                "mDataProp_1":    "1",
-                "sSearch_1":      "",
-                "bRegex_1":       "false",
-                "bSearchable_1":  "true",
-                "bSortable_1":    "true",
-                "mDataProp_2":    "2",
-                "sSearch_2":      "",
-                "bRegex_2":       "false",
-                "bSearchable_2":  "true",
-                "bSortable_2":    "true",
-                "mDataProp_3":    "3",
-                "sSearch_3":      "",
-                "bRegex_3":       "false",
-                "bSearchable_3":  "true",
-                "bSortable_3":    "true",
-                "mDataProp_4":    "4",
-                "sSearch_4":      "",
-                "bRegex_4":       "false",
-                "bSearchable_4":  "true",
-                "bSortable_4":    "true",
-                "mDataProp_5":    "5",
-                "sSearch_5":      "",
-                "bRegex_5":       "false",
-                "bSearchable_5":  "true",
-                "bSortable_5":    "true",
-                "mDataProp_6":    "6",
-                "sSearch_6":      "",
-                "bRegex_6":       "false",
-                "bSearchable_6":  "true",
-                "bSortable_6":    "true",
-                "mDataProp_7":    "7",
-                "sSearch_7":      "",
-                "bRegex_7":       "false",
-                "bSearchable_7":  "true",
-                "bSortable_7":    "true",
-                "mDataProp_8":    "8",
-                "sSearch_8":      "",
-                "bRegex_8":       "false",
-                "bSearchable_8":  "false",
-                "sSearch":        "",
-                "bRegex":         "false",
-                "iSortCol_0":     "0",
-                "sSortDir_0":     "desc",
-                "iSortingCols":   "1",
-                "_":              str(int(time.time() * 1000)),
-            }
-            if self._sesskey:
-                params["sesskey"] = self._sesskey
+        for attempt in range(2):
+            try:
+                return await self._fetch_cdr_once()
+            except (aiohttp.ServerDisconnectedError, aiohttp.ClientConnectionError, asyncio.TimeoutError) as e:
+                logger.warning(f"[{self._name}] Fetch CDR connection error (attempt {attempt + 1}): {e}")
+                if self._session and not self._session.closed:
+                    await self._session.close()
+                self._session = None
+                if attempt == 0:
+                    await asyncio.sleep(1)
+                    continue
+                return None, str(e)
+            except Exception as e:
+                logger.error(f"Fetch CDR: {e}")
+                return None, str(e)
 
-            async with sess.get(
-                self._data_url,
-                params=params,
-                headers={
-                    "Referer":          f"{self._base}/ints/client/SMSCDRStats",
-                    "X-Requested-With": "XMLHttpRequest",
-                    "Accept":           "application/json, text/javascript, */*; q=0.01",
-                    "Connection":       "keep-alive",
-                },
-                allow_redirects=True,
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                final = str(resp.url)
-                login_path = self._login_page.split(self._base)[-1].lower()
-                if login_path in final.lower() or "/sign-in" in final.lower():
+    async def _fetch_cdr_once(self):
+        sess   = await self._get_session()
+        now_dt = datetime.now()
+        fdate1 = "2026-01-05 00:00:00"
+        fdate2 = now_dt.strftime("%Y-%m-%d 23:59:59")
+        params = {
+            "fdate1":         fdate1,
+            "fdate2":         fdate2,
+            "frange":         "",
+            "fclient":        "",
+            "fnum":           "",
+            "fcli":           "",
+            "fgdate":         "",
+            "fgmonth":        "",
+            "fgrange":        "",
+            "fgclient":       "",
+            "fgnumber":       "",
+            "fgcli":          "",
+            "fg":             "0",
+            "sEcho":          "1",
+            "iColumns":       "9",
+            "sColumns":       "........",
+            "iDisplayStart":  "0",
+            "iDisplayLength": "25",
+            "mDataProp_0":    "0",
+            "sSearch_0":      "",
+            "bRegex_0":       "false",
+            "bSearchable_0":  "true",
+            "bSortable_0":    "true",
+            "mDataProp_1":    "1",
+            "sSearch_1":      "",
+            "bRegex_1":       "false",
+            "bSearchable_1":  "true",
+            "bSortable_1":    "true",
+            "mDataProp_2":    "2",
+            "sSearch_2":      "",
+            "bRegex_2":       "false",
+            "bSearchable_2":  "true",
+            "bSortable_2":    "true",
+            "mDataProp_3":    "3",
+            "sSearch_3":      "",
+            "bRegex_3":       "false",
+            "bSearchable_3":  "true",
+            "bSortable_3":    "true",
+            "mDataProp_4":    "4",
+            "sSearch_4":      "",
+            "bRegex_4":       "false",
+            "bSearchable_4":  "true",
+            "bSortable_4":    "true",
+            "mDataProp_5":    "5",
+            "sSearch_5":      "",
+            "bRegex_5":       "false",
+            "bSearchable_5":  "true",
+            "bSortable_5":    "true",
+            "mDataProp_6":    "6",
+            "sSearch_6":      "",
+            "bRegex_6":       "false",
+            "bSearchable_6":  "true",
+            "bSortable_6":    "true",
+            "mDataProp_7":    "7",
+            "sSearch_7":      "",
+            "bRegex_7":       "false",
+            "bSearchable_7":  "true",
+            "bSortable_7":    "true",
+            "mDataProp_8":    "8",
+            "sSearch_8":      "",
+            "bRegex_8":       "false",
+            "bSearchable_8":  "false",
+            "sSearch":        "",
+            "bRegex":         "false",
+            "iSortCol_0":     "0",
+            "sSortDir_0":     "desc",
+            "iSortingCols":   "1",
+            "_":              str(int(time.time() * 1000)),
+        }
+        if self._sesskey:
+            params["sesskey"] = self._sesskey
+
+        async with sess.get(
+            self._data_url,
+            params=params,
+            headers={
+                "Referer":          f"{self._base}/ints/client/SMSCDRStats",
+                "X-Requested-With": "XMLHttpRequest",
+                "Accept":           "application/json, text/javascript, */*; q=0.01",
+                "Connection":       "keep-alive",
+            },
+            allow_redirects=True,
+            timeout=aiohttp.ClientTimeout(total=30),
+        ) as resp:
+            final = str(resp.url)
+            login_path = self._login_page.split(self._base)[-1].lower()
+            if login_path in final.lower() or "/sign-in" in final.lower():
+                self._logged_in         = False
+                worker_info[self._wi_logged] = False
+                return None, "session_expired"
+            text = await resp.text(errors="replace")
+            if not text.strip():
+                return None, "empty_response"
+            try:
+                data = json.loads(text)
+            except Exception:
+                if ("login" in text.lower() or "sign-in" in text.lower()) and len(text) < 5000:
                     self._logged_in         = False
                     worker_info[self._wi_logged] = False
                     return None, "session_expired"
-                text = await resp.text(errors="replace")
-                if not text.strip():
-                    return None, "empty_response"
-                try:
-                    data = json.loads(text)
-                except Exception:
-                    if ("login" in text.lower() or "sign-in" in text.lower()) and len(text) < 5000:
-                        self._logged_in         = False
-                        worker_info[self._wi_logged] = False
-                        return None, "session_expired"
-                    return None, "parse_error"
+                return None, "parse_error"
 
-                aa   = data.get("aaData", [])
-                rows = []
-                for row in aa:
-                    if len(row) < 5:
-                        continue
-                    rows.append({
-                        "date":    str(row[0]).strip(),
-                        "range":   str(row[1]).strip(),
-                        "number":  str(row[2]).strip(),
-                        "service": str(row[3]).strip(),
-                        "sms":     str(row[4]).strip(),
-                    })
-                self._last_activity = time.time()
-                return rows, None
-
-        except Exception as e:
-            logger.error(f"Fetch CDR: {e}")
-            return None, str(e)
+            aa   = data.get("aaData", [])
+            rows = []
+            for row in aa:
+                if len(row) < 5:
+                    continue
+                rows.append({
+                    "date":    str(row[0]).strip(),
+                    "range":   str(row[1]).strip(),
+                    "number":  str(row[2]).strip(),
+                    "service": str(row[3]).strip(),
+                    "sms":     str(row[4]).strip(),
+                })
+            self._last_activity = time.time()
+            return rows, None
 
     async def close(self):
         if self._session and not self._session.closed:
@@ -1778,6 +1816,34 @@ async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     USER_STATE.pop(update.effective_user.id, None)
     await send_msg(context.bot, update.effective_chat.id, "ᴄᴀɴᴄᴇʟʟᴇᴅ.", reply_markup=main_menu_markup(update.effective_user.id))
 
+async def track_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cmu     = update.my_chat_member or update.chat_member
+    chat    = update.effective_chat
+    new     = cmu.new_chat_member
+    old     = cmu.old_chat_member
+    user    = new.user
+
+    if update.my_chat_member and user.id == context.bot.id:
+        if new.status in ("member", "administrator"):
+            await db_execute(
+                "INSERT INTO bot_chats (chat_id, title, chat_type) VALUES ($1, $2, $3) "
+                "ON CONFLICT (chat_id) DO UPDATE SET title=$2, chat_type=$3",
+                chat.id, chat.title or "", chat.type,
+            )
+        elif new.status in ("left", "kicked"):
+            await db_execute("DELETE FROM bot_chats WHERE chat_id=$1", chat.id)
+            await db_execute("DELETE FROM seen_members WHERE chat_id=$1", chat.id)
+        return
+
+    if update.chat_member and not user.is_bot:
+        if new.status in ("member", "administrator", "restricted"):
+            await db_execute(
+                "INSERT INTO seen_members (chat_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                chat.id, user.id,
+            )
+        elif new.status in ("left", "kicked"):
+            await db_execute("DELETE FROM seen_members WHERE chat_id=$1 AND user_id=$2", chat.id, user.id)
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user  = query.from_user
@@ -1974,6 +2040,65 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "adm_status":
         await edit_msg(query, await status_text(), reply_markup=back_to_admin())
+        return
+
+    if data == "adm_kickall":
+        chats = await db_fetchall("SELECT chat_id, title, chat_type FROM bot_chats")
+        if not chats:
+            await edit_msg(
+                query,
+                "┌─ ᴋɪᴄᴋ ᴀʟʟ\n├─❏ ʙᴏᴛ ɪꜱɴ'ᴛ ɪɴ ᴀɴʏ ɢʀᴏᴜᴘꜱ/ᴄʜᴀɴɴᴇʟꜱ\n└─❏",
+                reply_markup=back_to_admin(),
+            )
+            return
+        lines = "\n".join(f"├─❏ {(c['title'] or str(c['chat_id']))} ({c['chat_type']})" for c in chats)
+        await edit_msg(
+            query,
+            f"┌─ ᴋɪᴄᴋ ᴀʟʟ\n├─❏ ᴛʜɪꜱ ᴡɪʟʟ ʙᴀɴ ᴀʟʟ ᴋɴᴏᴡɴ ᴍᴇᴍʙᴇʀꜱ ꜰʀᴏᴍ:\n{lines}\n├─❏ ʙᴏᴛ ᴍᴜꜱᴛ ʙᴇ ᴀᴅᴍɪɴ ᴡɪᴛʜ ʙᴀɴ ʀɪɢʜᴛꜱ\n├─❏ ᴀʀᴇ ʏᴏᴜ ꜱᴜʀᴇ?\n└─❏",
+            reply_markup=kickall_confirm_markup(),
+        )
+        return
+
+    if data == "adm_kickall_confirm":
+        await edit_msg(query, "┌─ ᴋɪᴄᴋ ᴀʟʟ\n├─❏ ʀᴜɴɴɪɴɢ...\n└─❏", reply_markup=None)
+        result_lines = []
+        chats = await db_fetchall("SELECT chat_id, title, chat_type FROM bot_chats")
+        for c in chats:
+            chat_id = c["chat_id"]
+            title   = c["title"] or str(chat_id)
+            try:
+                me = await context.bot.get_chat_member(chat_id, context.bot.id)
+                if me.status != "administrator" or not getattr(me, "can_restrict_members", False):
+                    result_lines.append(f"├─❏ {title} : ɴᴏ ʙᴀɴ ʀɪɢʜᴛꜱ ❌")
+                    continue
+            except Exception as e:
+                result_lines.append(f"├─❏ {title} : ᴇʀʀᴏʀ ({e})")
+                continue
+
+            members = await db_fetchall("SELECT user_id FROM seen_members WHERE chat_id=$1", chat_id)
+            kicked = 0
+            failed = 0
+            for m in members:
+                uid = m["user_id"]
+                if uid == context.bot.id or is_admin(uid):
+                    continue
+                try:
+                    await context.bot.ban_chat_member(chat_id, uid)
+                    await context.bot.unban_chat_member(chat_id, uid, only_if_banned=True)
+                    kicked += 1
+                except Exception:
+                    failed += 1
+                await asyncio.sleep(0.05)
+
+            await db_execute("DELETE FROM seen_members WHERE chat_id=$1", chat_id)
+            result_lines.append(f"├─❏ {title} : ᴋɪᴄᴋᴇᴅ {kicked}, ꜰᴀɪʟᴇᴅ {failed}")
+
+        body = "\n".join(result_lines) if result_lines else "├─❏ ɴᴏᴛʜɪɴɢ ᴛᴏ ᴅᴏ"
+        await send_msg(
+            context.bot, update.effective_chat.id,
+            f"┌─ ᴋɪᴄᴋ ᴀʟʟ ᴄᴏᴍᴘʟᴇᴛᴇ\n{body}\n└─❏",
+            reply_markup=back_to_admin(),
+        )
         return
 
     if data == "adm_add_numbers":
@@ -2337,6 +2462,8 @@ if __name__ == "__main__":
     application.add_handler(CommandHandler("start",  start))
     application.add_handler(CommandHandler("cancel", cancel_cmd))
     application.add_handler(CallbackQueryHandler(handle_callback))
+    application.add_handler(ChatMemberHandler(track_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
+    application.add_handler(ChatMemberHandler(track_chat_member, ChatMemberHandler.CHAT_MEMBER))
     application.add_handler(MessageHandler(filters.Document.ALL, document_handler))
     application.add_handler(MessageHandler(filters.PHOTO, photo_input_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_input_handler))
