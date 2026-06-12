@@ -3,7 +3,7 @@ aiohttp==3.9.5
 beautifulsoup4==4.12.3
 openpyxl==3.1.2
 lxml==5.2.2
-asyncpg==0.29.0
+aiosqlite==0.20.0
 phonenumbers==8.13.39
 pandas==2.2.2
 xlrd==2.0.1
